@@ -2,6 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import Konva from "konva";
 import { Stage, Layer, Image, Rect, Transformer } from "react-konva";
 import useImage from "use-image";
+import { useHistory } from "@/hooks/useHistory";
 
 interface AnnoCanvasProps {
   imageUrl?: string;
@@ -38,7 +39,12 @@ export default function AnnoCanvas({
   });
 
   // 바운딩 박스 관련 상태
-  const [boxes, setBoxes] = useState<Box[]>([]);
+  const history = useHistory<Box[]>({
+    initialValue: [],
+    maxHistorySize: 50,
+  });
+  const boxes = history.current;
+  const setBoxes = history.push;
   const [newBox, setNewBox] = useState<{
     x: number;
     y: number;
@@ -149,9 +155,51 @@ export default function AnnoCanvas({
     }
   }, [selectedId]);
 
-  // Delete 키로 선택된 박스 삭제, ESC 키로 그리기 취소
+  // boxes 변경 시 Konva 노드 동기화 (undo/redo 대응)
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    boxes.forEach((box) => {
+      const node = stage.findOne("#" + box.id);
+      if (node) {
+        node.x(box.x);
+        node.y(box.y);
+        node.width(box.width);
+        node.height(box.height);
+      }
+    });
+
+    stage.getLayers().forEach((layer) => layer.batchDraw());
+  }, [boxes]);
+
+  // Delete 키로 선택된 박스 삭제, ESC 키로 그리기 취소, Cmd+Z/Cmd+Shift+Z (Mac) 또는 Ctrl+Z/Ctrl+Shift+Z (Windows/Linux)로 undo/redo
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // 플랫폼별 단축키: Mac은 Meta 키, Windows/Linux는 Ctrl 키 사용
+      const isModifierPressed = e.metaKey || e.ctrlKey;
+
+      // Undo: Cmd+Z (Mac) 또는 Ctrl+Z (Windows/Linux)
+      if (isModifierPressed && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        if (history.canUndo) {
+          history.undo();
+          setSelectedId(null);
+        }
+        return;
+      }
+
+      // Redo: Cmd+Shift+Z (Mac) 또는 Ctrl+Shift+Z (Windows/Linux)
+      if (isModifierPressed && e.shiftKey && e.key === "z") {
+        e.preventDefault();
+        if (history.canRedo) {
+          history.redo();
+          setSelectedId(null);
+        }
+        return;
+      }
+
+      // Delete/Backspace: 선택된 박스 삭제
       if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
         setBoxes(boxes.filter((box) => box.id !== selectedId));
         setSelectedId(null);
@@ -165,7 +213,7 @@ export default function AnnoCanvas({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, boxes, isDrawingMode]);
+  }, [selectedId, boxes, isDrawingMode, history, setBoxes]);
 
   // Stage 밖 클릭으로 박스 확정 (확대 시)
   useEffect(() => {
@@ -202,7 +250,7 @@ export default function AnnoCanvas({
 
     document.addEventListener("click", handleGlobalClick);
     return () => document.removeEventListener("click", handleGlobalClick);
-  }, [isDrawingMode, newBox, firstPoint, boxes]);
+  }, [isDrawingMode, newBox, firstPoint, boxes, setBoxes]);
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
